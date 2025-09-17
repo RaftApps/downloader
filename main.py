@@ -6,12 +6,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from yt_dlp import YoutubeDL
 from urllib.parse import urlparse, parse_qs
-
 from playwright.async_api import async_playwright
 
 app = FastAPI()
 
-# Static & Templates
+# Mount static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -37,37 +36,56 @@ async def websocket_extract(websocket: WebSocket):
 
             try:
                 formats = []
-                title = "Unknown Video"
+                title = ""
                 thumbnail = ""
 
                 if "youtube.com" in url or "youtu.be" in url:
-                    # --------- YouTube via Playwright ---------
+                    # ------------------ YouTube via Playwright ------------------
                     async with async_playwright() as p:
-                        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
-                        page = await browser.new_page()
+                        browser = await p.chromium.launch(headless=True)
+                        context = await browser.new_context()
+
+                        # Optional: load cookies from a JSON file to handle age-restricted/private videos
+                        cookies_path = "youtube_cookies.json"
+                        if os.path.exists(cookies_path):
+                            cookies = []
+                            import json
+                            with open(cookies_path, "r") as f:
+                                cookies = json.load(f)
+                            await context.add_cookies(cookies)
+
+                        page = await context.new_page()
                         await page.goto(url, wait_until="networkidle")
+
+                        # Get title
                         title = await page.title()
 
-                        # Extract video URL from ytInitialPlayerResponse
+                        # Try to get video URL from <video> tag first
                         video_url = await page.evaluate("""() => {
-                            try {
-                                const scripts = Array.from(document.querySelectorAll('script'));
-                                for (let s of scripts) {
-                                    if (s.innerText.includes('ytInitialPlayerResponse')) {
-                                        let jsonStr = s.innerText.match(/ytInitialPlayerResponse\\s*=\\s*(\\{.*\\});/);
-                                        if (jsonStr && jsonStr[1]) {
-                                            let data = JSON.parse(jsonStr[1]);
-                                            let formats = data.streamingData?.formats || [];
-                                            if (formats.length > 0) return formats[0].url || '';
-                                        }
-                                    }
-                                }
-                            } catch(e){ return ''; }
-                            return '';
+                            const vid = document.querySelector('video');
+                            return vid ? vid.src : '';
                         }""")
-                        await browser.close()
 
-                        if video_url:
+                        # If video tag not found, fallback to yt-dlp inside Playwright context
+                        if not video_url:
+                            # Use yt-dlp with page content
+                            html_content = await page.content()
+                            ydl_opts = {"quiet": True, "skip_download": True, "format": "bestvideo+bestaudio/best"}
+                            with YoutubeDL(ydl_opts) as ydl:
+                                info = ydl.extract_info(url, download=False)
+                                for f in info.get("formats", []):
+                                    if f.get("url"):
+                                        formats.append({
+                                            "format_id": f["format_id"],
+                                            "type": "video+audio" if f.get("vcodec") != "none" and f.get("acodec") != "none" else "video" if f.get("vcodec") != "none" else "audio",
+                                            "resolution": f"{f.get('height', '')}p" if f.get("height") else "",
+                                            "ext": f.get("ext"),
+                                            "direct_url": f["url"]
+                                        })
+                                title = info.get("title")
+                                thumbnail = info.get("thumbnail", "")
+
+                        else:
                             formats.append({
                                 "format_id": "yt_playwright",
                                 "type": "video+audio",
@@ -75,38 +93,28 @@ async def websocket_extract(websocket: WebSocket):
                                 "ext": "mp4",
                                 "direct_url": video_url
                             })
+
+                        await browser.close()
                 else:
-                    # --------- Other platforms via yt-dlp ---------
+                    # ------------------ Other platforms via yt-dlp ------------------
                     ydl_opts = {"quiet": True, "skip_download": True, "format": "bestvideo+bestaudio/best"}
                     with YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(url, download=False)
 
-                    title = info.get("title", title)
+                    for f in info.get("formats", []):
+                        if f.get("url"):
+                            formats.append({
+                                "format_id": f["format_id"],
+                                "type": "video+audio" if f.get("vcodec") != "none" and f.get("acodec") != "none" else "video" if f.get("vcodec") != "none" else "audio",
+                                "resolution": f"{f.get('height', '')}p" if f.get("height") else "",
+                                "ext": f.get("ext"),
+                                "direct_url": f["url"]
+                            })
+                    title = info.get("title")
                     thumbnail = info.get("thumbnail", "")
 
-                    seen = set()
-                    for f in info.get("formats", []):
-                        url_f = f.get("url")
-                        if not url_f:
-                            continue
-                        vcodec, acodec, height = f.get("vcodec"), f.get("acodec"), f.get("height")
-                        if vcodec != "none" and acodec != "none":
-                            formats.append({"format_id": f["format_id"], "type": "video+audio",
-                                            "resolution": f"{height}p" if height else "best",
-                                            "ext": f.get("ext"), "direct_url": url_f})
-                        elif vcodec != "none" and height and height not in seen:
-                            formats.append({"format_id": f["format_id"], "type": "video",
-                                            "resolution": f"{height}p", "ext": f.get("ext"), "direct_url": url_f})
-                            seen.add(height)
-                        elif vcodec == "none" and acodec != "none":
-                            formats.append({"format_id": f["format_id"], "type": "audio",
-                                            "bitrate": f.get("abr"), "ext": f.get("ext"), "direct_url": url_f})
-
-                await websocket.send_json({
-                    "title": title,
-                    "thumbnail": thumbnail,
-                    "formats": formats
-                })
+                result = {"title": title or "Video", "thumbnail": thumbnail, "formats": formats}
+                await websocket.send_json(result)
                 await websocket.send_json({"status": "done", "message": "🎯 Done! Direct links ready."})
 
             except Exception as e:
@@ -118,9 +126,13 @@ async def websocket_extract(websocket: WebSocket):
 
 # ----------------- Download Endpoint -----------------
 @app.get("/download")
-def download(video_url: str = Query(...), title: str = Query(default="video"),
-             resolution: str = Query(default=""), type_: str = Query(default="")):
-
+def download(
+    video_url: str = Query(...),
+    title: str = Query(default="video"),
+    resolution: str = Query(default=""),
+    type_: str = Query(default="")
+):
+    """Handles progressive vs adaptive streams differently."""
     if type_ == "video+audio":
         import requests
         r = requests.get(video_url, stream=True)
@@ -136,7 +148,7 @@ def download(video_url: str = Query(...), title: str = Query(default="video"),
         filename = "_".join(filename_parts) + f".{ext}"
 
         return StreamingResponse(
-            r.iter_content(chunk_size=1024 * 1024),
+            r.iter_content(chunk_size=1024*1024),
             media_type="application/octet-stream",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
