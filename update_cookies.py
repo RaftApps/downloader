@@ -26,6 +26,7 @@ try:
 
     with open(COOKIES_FILE, "w") as f:
         for c in cookies:
+            print(c)
             f.write(
                 f"{c['domain']}\t"
                 f"{'TRUE' if c.get('secure', False) else 'FALSE'}\t"
@@ -34,6 +35,7 @@ try:
                 f"{c.get('expiry', 0)}\t"
                 f"{c['name']}\t{c['value']}\n"
             )
+    print(cookies)
     print(f"[+] Cookies updated at {COOKIES_FILE}")
 
 finally:
