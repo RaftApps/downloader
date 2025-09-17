@@ -6,9 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from yt_dlp import YoutubeDL
 from urllib.parse import urlparse, parse_qs
-
-# Playwright imports
-from playwright.async_api import async_playwright
+import requests
 
 app = FastAPI()
 
@@ -37,77 +35,58 @@ async def websocket_extract(websocket: WebSocket):
             await websocket.send_json({"status": "progress", "message": "🔍 Extracting info..."})
 
             try:
-                if "youtube.com" in url or "youtu.be" in url:
-                    # ------------------ YouTube via Playwright ------------------
-                    async with async_playwright() as p:
-                        browser = await p.chromium.launch(headless=True)
-                        page = await browser.new_page()
-                        await page.goto(url)
-                        title = await page.title()
-                        video_url = await page.evaluate("""() => {
-                            const vid = document.querySelector('video');
-                            return vid ? vid.src : '';
-                        }""")
-                        await browser.close()
+                # ------------------ Use yt-dlp for YouTube and other platforms ------------------
+                ydl_opts = {"quiet": True, "skip_download": True, "format": "bestvideo+bestaudio/best"}
+                with YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
 
-                        formats = []
-                        if video_url:
-                            formats.append({
-                                "format_id": "yt_playwright",
-                                "type": "video+audio",
-                                "resolution": "best",
-                                "ext": "mp4",
-                                "direct_url": video_url
-                            })
-                        result = {"title": title or "YouTube Video", "thumbnail": "", "formats": formats}
-                        await websocket.send_json(result)
+                formats = []
+                seen_res = set()
+                for f in info.get("formats", []):
+                    url_f = f.get("url")
+                    if not url_f:
+                        continue
 
-                else:
-                    # ------------------ Other platforms via yt-dlp ------------------
-                    ydl_opts = {"quiet": True, "skip_download": True, "format": "bestvideo+bestaudio/best"}
-                    with YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(url, download=False)
+                    vcodec = f.get("vcodec")
+                    acodec = f.get("acodec")
+                    height = f.get("height")
 
-                    formats = []
-                    seen = set()
-                    for f in info.get("formats", []):
-                        height = f.get("height")
-                        vcodec = f.get("vcodec")
-                        acodec = f.get("acodec")
-                        url_f = f.get("url")
-                        if not url_f:
-                            continue
+                    if vcodec != "none" and acodec != "none":
+                        # Video+audio
+                        formats.append({
+                            "format_id": f["format_id"],
+                            "type": "video+audio",
+                            "resolution": f"{height}p" if height else "best",
+                            "ext": f.get("ext"),
+                            "direct_url": url_f
+                        })
+                    elif vcodec != "none" and height and height not in seen_res:
+                        # Video only
+                        formats.append({
+                            "format_id": f["format_id"],
+                            "type": "video",
+                            "resolution": f"{height}p",
+                            "ext": f.get("ext"),
+                            "direct_url": url_f
+                        })
+                        seen_res.add(height)
+                    elif vcodec == "none" and acodec != "none":
+                        # Audio only
+                        formats.append({
+                            "format_id": f["format_id"],
+                            "type": "audio",
+                            "bitrate": f.get("abr"),
+                            "ext": f.get("ext"),
+                            "direct_url": url_f
+                        })
 
-                        if vcodec != "none" and acodec != "none":
-                            label = f"{height}p" if height else "unknown"
-                            formats.append({
-                                "format_id": f["format_id"],
-                                "type": "video+audio",
-                                "resolution": label,
-                                "ext": f.get("ext"),
-                                "direct_url": url_f
-                            })
-                        elif vcodec != "none" and height and height not in seen:
-                            formats.append({
-                                "format_id": f["format_id"],
-                                "type": "video",
-                                "resolution": f"{height}p",
-                                "ext": f.get("ext"),
-                                "direct_url": url_f
-                            })
-                            seen.add(height)
-                        elif vcodec == "none" and acodec != "none":
-                            formats.append({
-                                "format_id": f["format_id"],
-                                "type": "audio",
-                                "bitrate": f.get("abr"),
-                                "ext": f.get("ext"),
-                                "direct_url": url_f
-                            })
+                result = {
+                    "title": info.get("title", "video"),
+                    "thumbnail": info.get("thumbnail", ""),
+                    "formats": formats
+                }
 
-                    result = {"title": info.get("title"), "thumbnail": info.get("thumbnail"), "formats": formats}
-                    await websocket.send_json(result)
-
+                await websocket.send_json(result)
                 await websocket.send_json({"status": "done", "message": "🎯 Done! Direct links ready."})
 
             except Exception as e:
@@ -127,7 +106,6 @@ def download(
 ):
     """Handles progressive vs adaptive streams differently."""
     if type_ == "video+audio":
-        import requests
         r = requests.get(video_url, stream=True)
         qs = parse_qs(urlparse(video_url).query)
         mime = qs.get("mime", ["video/mp4"])[0]
