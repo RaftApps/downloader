@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>HD Video Downloader For All</title>
+  <style>
+    body {
+      font-family: Arial;
+      background: #f4f4f9;
+      margin: 0;
+      padding: 20px;
+      color: #333;
+    }
+    h2 { text-align: center; color: #444; }
+    #container {
+      max-width: 600px;
+      margin: 20px auto;
+      background: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    }
+    input {
+      width: 75%;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      margin-right: 10px;
+      font-size: 14px;
+    }
+    button {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      background: #007bff;
+      color: #fff;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover { background: #0056b3; }
+    #loading {
+      display: none;
+      margin-top: 15px;
+      text-align: center;
+    }
+    .spinner {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #007bff;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+      margin: auto;
+    }
+    @keyframes spin { 0% {transform: rotate(0deg);} 100% {transform: rotate(360deg);} }
+    #results { margin-top: 20px; }
+    .format-card {
+      background: #f9f9f9;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #ddd;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .download-btn {
+      background: #28a745;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 14px;
+    }
+    .download-btn:hover { background: #218838; }
+    #progress {
+      display: none;
+      margin-top: 15px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h2>🎬 HD Video Downloader For All</h2>
+  <div id="container">
+    <input id="url" type="text" placeholder="Enter video URL" />
+    <button onclick="sendUrl()">Download</button>
+
+    <div id="loading">
+      <div class="spinner"></div>
+      <p>Please wait...<br><br>We're preparing your file.</p>
+    </div>
+
+    <div id="progress">
+      <p>⬇️ Downloading... Please wait</p>
+      <div class="spinner"></div>
+    </div>
+
+    <div id="results"></div>
+  </div>
+
+  <script>
+    const socket = new WebSocket("ws://127.0.0.1:8000/ws/extract");
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+
+        if (data.formats) {
+          document.getElementById("loading").style.display = "none";
+          showResults(data);
+        }
+
+        // if (data.status === "completed") {
+        //   hideAllAndRedirect();
+        // }
+
+      } catch {
+        console.log("Server:", event.data);
+      }
+    };
+
+    function sendUrl() {
+      const url = document.getElementById("url").value;
+      if (!url) return;
+      document.getElementById("results").innerHTML = "";
+      document.getElementById("loading").style.display = "block";
+      socket.send(url);
+    }
+
+    function showResults(data) {
+      const container = document.getElementById("results");
+      const backendBase = window.location.origin;
+
+      container.innerHTML = `
+        <div style="display: grid; justify-content: center; align-items: center; text-align: center;">
+          <h3>${data.title || "Untitled Video"}</h3>
+          ${data.thumbnail ? `<img src="${data.thumbnail}" height="200px" style="border-radius:10px;margin-bottom:15px;" />` : ""}
+        </div>
+      `;
+
+      data.formats.sort((a, b) => b.is_fast - a.is_fast);
+
+      data.formats.forEach(fmt => {
+        let label = "";
+        if (fmt.type === "video") {
+          label = `📹 Video Only ${fmt.resolution} (${fmt.ext})`;
+        } else if (fmt.type === "video+audio") {
+          label = `⚡🎥 Video + Audio ${fmt.resolution} (${fmt.ext}) ✅`;
+        } else if (fmt.type === "audio") {
+          label = `🎵 Audio ${fmt.bitrate || "?"} kbps (${fmt.ext})`;
+        }
+
+        container.innerHTML += `
+          <div class="format-card">
+            <span>${label}</span>
+            <a class="download-btn" href="${backendBase}/download?video_url=${encodeURIComponent(fmt.direct_url)}" target="_blank">Download</a>
+          </div>
+        `;
+      });
+    }
+
+    // function startDownload() {
+    //   document.getElementById("progress").style.display = "block";
+    // }
+
+    // function hideAllAndRedirect() {
+    //   document.getElementById("results").style.display = "none";
+    //   document.getElementById("progress").style.display = "none";
+    //   setTimeout(() => { window.location.href = "/"; }, 1000);
+    // }
+  </script>
+</body>
+</html>
