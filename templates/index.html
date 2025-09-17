@@ -1,6 +1,90 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HD Video Downloader</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<h1>HD Video Downloader</h1>
+<input type="text" id="video-url" placeholder="Paste video URL here">
+<button id="extract-btn">Get Links</button>
+<div id="status"></div>
+<div id="results"></div>
+
+<script>
+let ws;
+
+function connectWebSocket() {
+    ws = new WebSocket(`wss://${window.location.host}/ws/extract`);
+
+    ws.onopen = () => {
+        console.log("WebSocket connected");
+        document.getElementById("status").innerText = "Connected to server ✅";
+    };
+
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if(data.status === "progress") {
+            document.getElementById("status").innerText = data.message;
+        } 
+        else if(data.status === "done") {
+            document.getElementById("status").innerText = data.message;
+        } 
+        else if(data.error) {
+            document.getElementById("status").innerText = "❌ Error: " + data.error;
+        } 
+        else if(data.title && data.formats) {
+            const resultsDiv = document.getElementById("results");
+            resultsDiv.innerHTML = `<h2>${data.title}</h2>`;
+            data.formats.forEach(f => {
+                const btn = document.createElement("a");
+                btn.href = `/download?video_url=${encodeURIComponent(f.direct_url)}&title=${encodeURIComponent(data.title)}&resolution=${f.resolution}&type_=${f.type}`;
+                btn.innerText = `${f.type} - ${f.resolution}`;
+                btn.className = "download-btn";
+                btn.setAttribute("target","_blank");
+                resultsDiv.appendChild(btn);
+                resultsDiv.appendChild(document.createElement("br"));
+            });
+        }
+    };
+
+    ws.onclose = () => {
+        console.log("WebSocket disconnected, reconnecting...");
+        setTimeout(connectWebSocket, 2000); // auto-reconnect
+    };
+
+    ws.onerror = (err) => {
+        console.error("WebSocket error:", err);
+        ws.close();
+    };
+}
+
+document.getElementById("extract-btn").addEventListener("click", () => {
+    const url = document.getElementById("video-url").value.trim();
+    if (!url) return alert("Please enter a video URL!");
+    ws.send(url);
+});
+
+connectWebSocket();
+</script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
   <meta charset="UTF-8">
   <title>HD Video Downloader For All</title>
   <style>
@@ -172,4 +256,4 @@
     // }
   </script>
 </body>
-</html>
+</html> -->
