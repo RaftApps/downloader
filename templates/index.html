@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HD Video Downloader</title>
 <link rel="stylesheet" href="/static/styles.css">
+<style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    h1 { margin-bottom: 20px; }
+    #video-url { width: 70%; padding: 8px; }
+    #extract-btn { padding: 8px 12px; }
+    #status { margin-top: 10px; font-weight: bold; }
+    #results { margin-top: 20px; }
+    .download-btn { display: inline-block; margin: 5px 5px 5px 0; padding: 6px 10px; background: #4CAF50; color: white; text-decoration: none; border-radius: 4px; }
+    .thumbnail { max-width: 300px; margin: 10px 0; display: block; }
+</style>
 </head>
 <body>
 <h1>HD Video Downloader</h1>
@@ -26,34 +36,47 @@ function connectWebSocket() {
 
     ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+        const statusDiv = document.getElementById("status");
+        const resultsDiv = document.getElementById("results");
 
         if(data.status === "progress") {
-            document.getElementById("status").innerText = data.message;
+            statusDiv.innerText = data.message;
         } 
         else if(data.status === "done") {
-            document.getElementById("status").innerText = data.message;
+            statusDiv.innerText = data.message;
         } 
         else if(data.error) {
-            document.getElementById("status").innerText = "❌ Error: " + data.error;
+            statusDiv.innerText = "❌ Error: " + data.error;
         } 
         else if(data.title && data.formats) {
-            const resultsDiv = document.getElementById("results");
-            resultsDiv.innerHTML = `<h2>${data.title}</h2>`;
+            resultsDiv.innerHTML = ""; // clear previous
+            const titleElem = document.createElement("h2");
+            titleElem.innerText = data.title;
+            resultsDiv.appendChild(titleElem);
+
+            // show thumbnail if available
+            if(data.thumbnail){
+                const thumb = document.createElement("img");
+                thumb.src = data.thumbnail;
+                thumb.alt = "Thumbnail";
+                thumb.className = "thumbnail";
+                resultsDiv.appendChild(thumb);
+            }
+
             data.formats.forEach(f => {
                 const btn = document.createElement("a");
-                btn.href = `/download?video_url=${encodeURIComponent(f.direct_url)}&title=${encodeURIComponent(data.title)}&resolution=${f.resolution}&type_=${f.type}`;
-                btn.innerText = `${f.type} - ${f.resolution}`;
+                btn.href = `/download?video_url=${encodeURIComponent(f.direct_url)}&title=${encodeURIComponent(data.title)}&resolution=${encodeURIComponent(f.resolution || "")}&type_=${encodeURIComponent(f.type)}`;
+                btn.innerText = `${f.type} ${f.resolution || f.bitrate || ""}`.trim();
                 btn.className = "download-btn";
                 btn.setAttribute("target","_blank");
                 resultsDiv.appendChild(btn);
-                resultsDiv.appendChild(document.createElement("br"));
             });
         }
     };
 
     ws.onclose = () => {
         console.log("WebSocket disconnected, reconnecting...");
-        setTimeout(connectWebSocket, 2000); // auto-reconnect
+        setTimeout(connectWebSocket, 2000);
     };
 
     ws.onerror = (err) => {
@@ -65,14 +88,19 @@ function connectWebSocket() {
 document.getElementById("extract-btn").addEventListener("click", () => {
     const url = document.getElementById("video-url").value.trim();
     if (!url) return alert("Please enter a video URL!");
-    ws.send(url);
+    if(ws.readyState === WebSocket.OPEN){
+        ws.send(url);
+        document.getElementById("status").innerText = "⏳ Sending URL to server...";
+        document.getElementById("results").innerHTML = "";
+    } else {
+        alert("WebSocket not connected yet, try again in a few seconds.");
+    }
 });
 
 connectWebSocket();
 </script>
 </body>
 </html>
-
 
 
 
