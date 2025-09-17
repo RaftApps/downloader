@@ -37,6 +37,7 @@ async def websocket_extract(websocket: WebSocket):
                 ydl_opts = {
                     "quiet": True,
                     "skip_download": True,
+                    "cookies": "cookies/cookies.txt",
                     "format": "bestvideo+bestaudio/best",
                     "cookiefile": COOKIES_FILE  # Cookies for logged-in YouTube
                 }
