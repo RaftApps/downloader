@@ -38,7 +38,7 @@ sudo systemctl restart $APP_NAME
 NGINX_FILE=/etc/nginx/sites-available/$APP_NAME
 sudo bash -c "cat > $NGINX_FILE" <<EOL
 server {
-    server_name yourdomain.com;
+    server_name downloader.hdvideodownload.xyz;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -52,5 +52,5 @@ EOL
 sudo ln -sf $NGINX_FILE /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl restart nginx
 
-sudo certbot --nginx -d yourdomain.com -n --agree-tos --email youremail@example.com
-echo "✅ Deployment complete! Visit https://yourdomain.com"
+sudo certbot --nginx -d downloader.hdvideodownload.xyz -n --agree-tos --email contact@raftapps.com
+echo "✅ Deployment complete! Visit https://downloader.hdvideodownload.xyz"
