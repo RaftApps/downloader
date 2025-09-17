@@ -6,11 +6,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from yt_dlp import YoutubeDL
 from urllib.parse import urlparse, parse_qs
-import requests
+
+from playwright.async_api import async_playwright
 
 app = FastAPI()
 
-# Mount static files and templates
+# Static & Templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
@@ -35,58 +36,77 @@ async def websocket_extract(websocket: WebSocket):
             await websocket.send_json({"status": "progress", "message": "🔍 Extracting info..."})
 
             try:
-                # ------------------ Use yt-dlp for YouTube and other platforms ------------------
-                ydl_opts = {"quiet": True, "skip_download": True, "format": "bestvideo+bestaudio/best"}
-                with YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-
                 formats = []
-                seen_res = set()
-                for f in info.get("formats", []):
-                    url_f = f.get("url")
-                    if not url_f:
-                        continue
+                title = "Unknown Video"
+                thumbnail = ""
 
-                    vcodec = f.get("vcodec")
-                    acodec = f.get("acodec")
-                    height = f.get("height")
+                if "youtube.com" in url or "youtu.be" in url:
+                    # --------- YouTube via Playwright ---------
+                    async with async_playwright() as p:
+                        browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+                        page = await browser.new_page()
+                        await page.goto(url, wait_until="networkidle")
+                        title = await page.title()
 
-                    if vcodec != "none" and acodec != "none":
-                        # Video+audio
-                        formats.append({
-                            "format_id": f["format_id"],
-                            "type": "video+audio",
-                            "resolution": f"{height}p" if height else "best",
-                            "ext": f.get("ext"),
-                            "direct_url": url_f
-                        })
-                    elif vcodec != "none" and height and height not in seen_res:
-                        # Video only
-                        formats.append({
-                            "format_id": f["format_id"],
-                            "type": "video",
-                            "resolution": f"{height}p",
-                            "ext": f.get("ext"),
-                            "direct_url": url_f
-                        })
-                        seen_res.add(height)
-                    elif vcodec == "none" and acodec != "none":
-                        # Audio only
-                        formats.append({
-                            "format_id": f["format_id"],
-                            "type": "audio",
-                            "bitrate": f.get("abr"),
-                            "ext": f.get("ext"),
-                            "direct_url": url_f
-                        })
+                        # Extract video URL from ytInitialPlayerResponse
+                        video_url = await page.evaluate("""() => {
+                            try {
+                                const scripts = Array.from(document.querySelectorAll('script'));
+                                for (let s of scripts) {
+                                    if (s.innerText.includes('ytInitialPlayerResponse')) {
+                                        let jsonStr = s.innerText.match(/ytInitialPlayerResponse\\s*=\\s*(\\{.*\\});/);
+                                        if (jsonStr && jsonStr[1]) {
+                                            let data = JSON.parse(jsonStr[1]);
+                                            let formats = data.streamingData?.formats || [];
+                                            if (formats.length > 0) return formats[0].url || '';
+                                        }
+                                    }
+                                }
+                            } catch(e){ return ''; }
+                            return '';
+                        }""")
+                        await browser.close()
 
-                result = {
-                    "title": info.get("title", "video"),
-                    "thumbnail": info.get("thumbnail", ""),
+                        if video_url:
+                            formats.append({
+                                "format_id": "yt_playwright",
+                                "type": "video+audio",
+                                "resolution": "best",
+                                "ext": "mp4",
+                                "direct_url": video_url
+                            })
+                else:
+                    # --------- Other platforms via yt-dlp ---------
+                    ydl_opts = {"quiet": True, "skip_download": True, "format": "bestvideo+bestaudio/best"}
+                    with YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+
+                    title = info.get("title", title)
+                    thumbnail = info.get("thumbnail", "")
+
+                    seen = set()
+                    for f in info.get("formats", []):
+                        url_f = f.get("url")
+                        if not url_f:
+                            continue
+                        vcodec, acodec, height = f.get("vcodec"), f.get("acodec"), f.get("height")
+                        if vcodec != "none" and acodec != "none":
+                            formats.append({"format_id": f["format_id"], "type": "video+audio",
+                                            "resolution": f"{height}p" if height else "best",
+                                            "ext": f.get("ext"), "direct_url": url_f})
+                        elif vcodec != "none" and height and height not in seen:
+                            formats.append({"format_id": f["format_id"], "type": "video",
+                                            "resolution": f"{height}p", "ext": f.get("ext"), "direct_url": url_f})
+                            seen.add(height)
+                        elif vcodec == "none" and acodec != "none":
+                            formats.append({"format_id": f["format_id"], "type": "audio",
+                                            "bitrate": f.get("abr"), "ext": f.get("ext"), "direct_url": url_f})
+
+                await websocket.send_json({
+                    "title": title,
+                    "thumbnail": thumbnail,
                     "formats": formats
-                }
-
-                await websocket.send_json(result)
+                })
                 await websocket.send_json({"status": "done", "message": "🎯 Done! Direct links ready."})
 
             except Exception as e:
@@ -98,14 +118,11 @@ async def websocket_extract(websocket: WebSocket):
 
 # ----------------- Download Endpoint -----------------
 @app.get("/download")
-def download(
-    video_url: str = Query(...),
-    title: str = Query(default="video"),
-    resolution: str = Query(default=""),
-    type_: str = Query(default="")
-):
-    """Handles progressive vs adaptive streams differently."""
+def download(video_url: str = Query(...), title: str = Query(default="video"),
+             resolution: str = Query(default=""), type_: str = Query(default="")):
+
     if type_ == "video+audio":
+        import requests
         r = requests.get(video_url, stream=True)
         qs = parse_qs(urlparse(video_url).query)
         mime = qs.get("mime", ["video/mp4"])[0]
@@ -119,14 +136,12 @@ def download(
         filename = "_".join(filename_parts) + f".{ext}"
 
         return StreamingResponse(
-            r.iter_content(chunk_size=1024*1024),
+            r.iter_content(chunk_size=1024 * 1024),
             media_type="application/octet-stream",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
     else:
         return RedirectResponse(url=video_url)
-
-
 
 
 
