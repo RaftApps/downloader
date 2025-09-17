@@ -13,6 +13,9 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+# Path to cookies file
+COOKIES_FILE = os.path.join(os.path.dirname(__file__), "cookies/cookies.txt")
+
 @app.get("/favicon.ico")
 def favicon():
     return FileResponse("static/favicon.ico")
@@ -31,7 +34,13 @@ async def websocket_extract(websocket: WebSocket):
             await websocket.send_json({"status": "progress", "message": "🔍 Extracting info..."})
 
             try:
-                ydl_opts = {"quiet": True, "skip_download": True, "format": "bestvideo+bestaudio/best"}
+                ydl_opts = {
+                    "quiet": True,
+                    "skip_download": True,
+                    "format": "bestvideo+bestaudio/best",
+                    "cookiefile": COOKIES_FILE  # Cookies for logged-in YouTube
+                }
+
                 with YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
 
@@ -43,7 +52,6 @@ async def websocket_extract(websocket: WebSocket):
                     acodec = f.get("acodec")
                     vcodec = f.get("vcodec")
                     url_f = f.get("url")
-
                     if not url_f:
                         continue
 
@@ -83,6 +91,7 @@ async def websocket_extract(websocket: WebSocket):
 
     except WebSocketDisconnect:
         print("Client disconnected")
+
 
 @app.get("/download")
 def download(
