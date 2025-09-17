@@ -13,6 +13,10 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse("static/favicon.ico")
+
 @app.get("/", response_class=HTMLResponse)
 def root():
     return templates.TemplateResponse("index.html", {"request": {}})
