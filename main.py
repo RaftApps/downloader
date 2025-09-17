@@ -48,6 +48,7 @@ async def websocket_extract(websocket: WebSocket):
                             const vid = document.querySelector('video');
                             return vid ? vid.src : '';
                         }""")
+                        print(page)
                         await browser.close()
 
                         formats = []
